@@ -1,0 +1,34 @@
+version: "3.9"
+
+networks:
+  labnet:
+    internal: true   # no internet egress
+    driver: bridge
+
+services:
+  malicious-server:
+    build: ./malicious-server
+    container_name: pi_malicious_server
+    networks: [labnet]
+    # No ports exposed to host; only accessible inside labnet
+    restart: unless-stopped
+
+  listener:
+    build: ./listener
+    container_name: pi_listener
+    networks: [labnet]
+    tty: true        # allows interactive shell after attach
+    stdin_open: true
+    restart: unless-stopped
+
+  agent:
+    build: ./agent
+    container_name: pi_agent
+    networks: [labnet]
+    depends_on:
+      - malicious-server
+      - listener
+    environment:
+      TARGET_URL: http://malicious-server:8000
+      EXECUTE_PAYLOAD: "true"   # set to "false" to see decode without executing
+    restart: on-failure
