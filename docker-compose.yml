@@ -21,14 +21,117 @@ services:
     stdin_open: true
     restart: unless-stopped
 
-  agent:
-    build: ./agent
-    container_name: pi_agent
+## This was the toy agent that we started with
+#  agent:
+#    build: ./agent
+#    container_name: pi_agent
+#    networks: [labnet]
+#    depends_on:
+#      - malicious-server
+#      - listener
+#    environment:
+#      TARGET_URL: http://malicious-server:8000
+#      EXECUTE_PAYLOAD: "true"   # set to "false" to see decode without executing
+#    restart: on-failure
+
+  # --- local LLM (OpenAI-compatible) ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pi_ollama
+    networks: [labnet]
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=1
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+
+  # one-time helper to pull a small model into ollama (requires internet once)
+  ollama-pull:
+    image: ollama/ollama:latest
     networks: [labnet]
     depends_on:
-      - malicious-server
-      - listener
+      ollama:
+        condition: service_healthy
+    entrypoint: ["bash","-lc","ollama pull llama3.2 && echo 'model pulled' && sleep 2"]
+    profiles: ["pull"]  # run only when you pass --profile pull
+
+  cai-unprotected:
+    build: ./cai-agent
+    container_name: pi_cai_unprot
+    networks: [labnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    tty: true
+    stdin_open: true
+    command: ["bash", "-lc", "sleep infinity"]
+    restart: unless-stopped
     environment:
-      TARGET_URL: http://malicious-server:8000
-      EXECUTE_PAYLOAD: "true"   # set to "false" to see decode without executing
-    restart: on-failure
+      LLM_PROVIDER: "openai"
+      OPENAI_API_KEY: "ollama"
+      OPENAI_BASE_URL: "http://ollama:11434/v1"
+      CAI_MODEL: "llama3.2"
+      CAI_GUARDRAILS: "false"
+      CAI_CHECK_UPDATES: "false"
+      CAI_STREAM: "false"
+      PYTHONUNBUFFERED: "1"
+      PROMPT_TOOLKIT_NO_CPR: "1"
+      CAI_TELEMETRY: "false"
+      CAI_TRACING: "true"
+      TERM: "dumb"
+
+  cai-protected:
+    build: ./cai-agent
+    container_name: pi_cai_prot
+    networks: [labnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    tty: true
+    stdin_open: true
+    command: ["bash", "-lc", "sleep infinity"]
+    restart: unless-stopped
+    environment:
+      LLM_PROVIDER: "openai"
+      OPENAI_API_KEY: "ollama"
+      OPENAI_BASE_URL: "http://ollama:11434/v1"
+      CAI_MODEL: "llama3.2"
+      CAI_GUARDRAILS: "true"
+      CAI_CHECK_UPDATES: "false"
+      CAI_STREAM: "false"
+      PYTHONUNBUFFERED: "1"
+      PROMPT_TOOLKIT_NO_CPR: "1"
+      CAI_TELEMETRY: "false"
+      CAI_TRACING: "true"
+      TERM: "dumb"
+
+  llm-agent:
+    build: ./llm-agent
+    container_name: pi_llm_agent
+    networks: [labnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+      malicious-server:
+        condition: service_started
+      listener:
+        condition: service_started
+    environment:
+      TARGET_URL: "http://malicious-server:8000"
+      OPENAI_BASE_URL: "http://ollama:11434/v1"
+      OPENAI_API_KEY: "ollama"
+      MODEL: "llama3.2"           # or a smaller one if RAM is tight (e.g., tinyllama:1.1b)
+      AUTO_EXECUTE: "true"        # set to "false" to only print the decoded command
+    # run once and exit so logs are clean
+    command: ["python", "agent.py"]
+
+
+volumes:
+  ollama_models:
+    name: ollama_models               # give it a fixed name
+    external: true                    # compose won’t delete it
