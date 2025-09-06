@@ -10,8 +10,12 @@ services:
     build: ./malicious-server
     container_name: pi_malicious_server
     networks: [labnet]
-    # No ports exposed to host; only accessible inside labnet
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "curl -sf http://localhost:8000 >/dev/null"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
 
   listener:
     build: ./listener
@@ -114,20 +118,20 @@ services:
     build: ./llm-agent
     container_name: pi_llm_agent
     networks: [labnet]
+    restart: unless-stopped
     depends_on:
-      ollama:
-        condition: service_healthy
       malicious-server:
-        condition: service_started
+        condition: service_healthy
       listener:
         condition: service_started
+      ollama:
+        condition: service_healthy
     environment:
-      TARGET_URL: "http://malicious-server:8000"
+      TARGET_URL: "http://pi_malicious_server:8000"   # use the *container_name* you already have
       OPENAI_BASE_URL: "http://ollama:11434/v1"
       OPENAI_API_KEY: "ollama"
-      MODEL: "llama3.2"           # or a smaller one if RAM is tight (e.g., tinyllama:1.1b)
-      AUTO_EXECUTE: "true"        # set to "false" to only print the decoded command
-    # run once and exit so logs are clean
+      MODEL: "llama3.2"
+      AUTO_EXECUTE: "true"
     command: ["python", "agent.py"]
 
 
